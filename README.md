@@ -30,4 +30,5 @@ GUI-Based MPD Downloader for DRM Protected content.
 + Choose "MPD URLs" from the drop-down menu
 + Select an MPD URL from the list and hit 'Download'
 
-![image](https://github.com/DevLARLEY/mpdl/assets/121249322/7977bf85-4e36-4ed9-885c-5d960d874c87)
+
+![image](https://github.com/DevLARLEY/mpdl/assets/121249322/461c8276-2e68-433e-a7fa-05ea3b8c12e6)
