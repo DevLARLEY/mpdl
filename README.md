@@ -1,6 +1,6 @@
 <img src="https://github.com/DevLARLEY/mpdl/blob/main/icon.png?raw=true" alt="drawing" width="200"/>
 
-# === ONLY TESTED IN WINDOWS FOR NOW ===
+# === ONLY TESTED ON WINDOWS FOR NOW ===
 
 # mpdl
 GUI-Based MPD Downloader for DRM Protected content.
