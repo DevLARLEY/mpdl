@@ -222,7 +222,6 @@ class Worker(QRunnable):
                     self.signals.progress.emit(
                         [self.uuid, f"Decrypting ({typ.capitalize()})", size + " MB", '0', '', '', self.link])
                     command = getMp4Decrypt() + " --key " + " --key ".join(self.keys) + ' ' + s + ' ' + out
-                    #print(command)
                     process = Popen(command, stdout=PIPE, stderr=PIPE)
                     stdout, stderr = process.communicate()
                     self.signals.progress.emit(
@@ -244,9 +243,8 @@ class Worker(QRunnable):
                 v = ffmpeg.input(self.src[0])
                 a = ffmpeg.input(self.src[1])
                 c = config.parser
-                if c.getboolean("MAIN", "ffmpegfrompath"):
-                    ffmpeg.output(v, a, out, vcodec='copy', acodec='copy').run(quiet=True, overwrite_output=True,
-                                                                               cmd=c.get("MAIN", "ffmpegpath"))
+                if not c.getboolean("MAIN", "ffmpegfrompath"):
+                    ffmpeg.output(v, a, out, vcodec='copy', acodec='copy').run(quiet=True, overwrite_output=True, cmd=c.get("MAIN", "ffmpegpath"))
                 else:
                     ffmpeg.output(v, a, out, vcodec='copy', acodec='copy').run(quiet=True, overwrite_output=True)
                 if os.path.exists(self.src[0]):
