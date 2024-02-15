@@ -9,7 +9,7 @@ GUI-Based MPD Downloader for DRM Protected content.
 + Python 3.12
 + ffmpeg
 + mp4decrypt
-+ **Content Decryption Module**
++ [https://forum.videohelp.com/threads/408031-Dumping-Your-own-L3-CDM-with-Android-Studio](**Content Decryption Module**)
 + Firefox (Installed)
 
 # Setup
