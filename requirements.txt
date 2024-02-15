@@ -7,3 +7,4 @@ urllib3==1.26.18
 xmltodict==0.13.0
 packaging==23.2
 setuptools==68.2.2
+google-api-python-client==2.118.0
