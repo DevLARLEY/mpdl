@@ -14,8 +14,8 @@ GUI-Based MPD Downloader for DRM Protected content.
 
 # Setup
 + Clone the Repo
-+ Install the required modules: `pip3.12 install -r requirements.txt`
-+ Run mpdl: `python3.12 mpdl.py`
++ Install the required modules: `pip3 install -r requirements.txt`
++ Run mpdl: `python3 mpdl.py`
 
 # Usage
 + Select a CDM
