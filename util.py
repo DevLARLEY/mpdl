@@ -102,26 +102,19 @@ def getPSSH(mpd_url):
 
 def getPSSH2(mpd_url):
     pssh = []
-    print("1")
     try:
         name, headers = urllib.request.urlretrieve(mpd_url)
     except Exception:
         return []
-    print("2")
     f = open(name, "r").read()
-    print("3")
     res = re.findall('<cenc:pssh.*>.*<.*/cenc:pssh>', f)
-    print("4")
     for r in res:
         try:
             r = r.split('>')[1].split('<')[0]
             pssh.append(r)
         except Exception:
             return []
-    print("5")
     if pssh:
-        print("5.1")
         return min(pssh, key=len)
     else:
-        print("5.2")
         return []
