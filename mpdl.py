@@ -1,7 +1,9 @@
+import base64
 import datetime
 
 import config
 import util
+import initext
 
 import os.path
 import sys
@@ -25,7 +27,7 @@ from pathlib import Path
 
 # Config
 # Selenium Version 3.4.1
-VERSION = "1.0.0"
+VERSION = "3.0.0"
 
 app = QtWidgets.QApplication(sys.argv)
 driverType = None
@@ -43,26 +45,27 @@ def writeHeaders(headers, url):
     with open("headers.py", 'w') as file:
         file.write("import requests\n")
         file.write("headers = {\n")
-        file.write(headers)
+        file.write(headers if headers is not None else "")
         file.write("\n}\n")
         file.write(f"response = requests.post('{url}', headers=headers)\n")
 
 
-def getKeys(self, pssh, lic_url):
+def getKeys(pssh, lic_url):
     import headers
     from data.pywidevine.L3.cdm import deviceconfig
-    from base64 import b64encode
     from data.pywidevine.L3.decrypt.wvdecryptcustom import WvDecrypt
     try:
         wvdecrypt = WvDecrypt(init_data_b64=pssh, cert_data_b64=None, device=deviceconfig.device_android_generic)
-        widevine_license = requests.post(url=lic_url, data=wvdecrypt.get_challenge(), headers=headers.headers)
-        license_b64 = b64encode(widevine_license.content)
-        wvdecrypt.update_license(license_b64)
-        correct, keyswvdecrypt = wvdecrypt.start_process()
-        return correct, keyswvdecrypt
-    except Exception as ex:
-        errorDialog(self, f"Unable to obtain decryption keys:\n{ex}")
-        return False, None
+        challenge = wvdecrypt.get_challenge()
+        if challenge is None:
+            return None
+        widevine_license = requests.post(url=lic_url, data=challenge, headers=headers.headers)
+        license_b64 = base64.b64encode(widevine_license.content)
+        if not wvdecrypt.update_license(license_b64):
+            return None
+        return wvdecrypt.start_process()
+    except Exception:
+        return None
 
 
 def checkcdm(self) -> bool:
@@ -110,19 +113,25 @@ class BrowserSignals(QObject):
 
 
 class Worker(QRunnable):
-    def __init__(self, link, pssh, lic, uuid, sniffer):
+    def __init__(self, source, pssh, lic, wid):
         super().__init__()
-        self.sniffer = sniffer
+        print(f"Worker(\n{source}, \n{pssh}, \n{lic}, \n{wid})")
         self.keys = None
-        self.link = link
+        self.d = False
+        if isinstance(source, list):
+            self.d = True
+            self.src = source
+            self.source = (source[0] if source[0] is not None else "No Video") + ", " + (source[1] if source[1] is not None else "No Audio")
+        else:
+            self.source = source
+            self.src = [None, None]
         self.pssh = pssh
         self.lic = lic
-        self.uuid = uuid
+        self.uuid = wid
         self.videosize = ''
         self.audiosize = ''
         self.signals = Signals()
         self.typ = 'video'
-        self.src = [None, None]
 
     @pyqtSlot()
     def run(self):
@@ -166,11 +175,13 @@ class Worker(QRunnable):
                     speed = str(int(sT / 1000))
 
             if perc == '0' and status == 'finished':
-                to = self.uuid + "." + self.typ + "." + name.split(".")[len(name.split(".")) - 1]
+                to = f"{self.uuid}.{self.typ}.{name.split('.')[len(name.split('.')) - 1]}"
                 try:
                     os.replace(name, to)
                 except Exception as ex:
                     self.signals.error.emit(str(ex))
+
+                # TODO: improve this
                 if self.typ == 'video':
                     self.src[0] = to
                     self.videosize = size
@@ -178,86 +189,93 @@ class Worker(QRunnable):
                     self.src[1] = to
                     self.audiosize = size
                 self.typ = 'audio'
+
             self.signals.progress.emit(
-                [self.uuid, f"{status.capitalize()} ({self.typ.capitalize()})", size + " MB", perc, eta,
-                 speed + " KB/s", self.link])
+                [self.uuid, f"{status.capitalize()} ({self.typ.capitalize()})", f"{size} MB", perc, eta, f"{speed} KB/s", self.source])
 
         try:
-            self.signals.started.emit([self.uuid, self.link])
+            self.signals.started.emit([self.uuid, self.source])
 
             # get keys
             self.signals.progress.emit(
-                [self.uuid, f"Obtaining Keys", '', '0', '', '', self.link])
-            writeHeaders(getHeaders(self.link), self.link)
-            correct, self.keys = getKeys(self.sniffer, self.pssh, self.lic)
-            if not correct or self.keys is None:
+                [self.uuid, f"Obtaining Keys", '', '0', '', '', self.source])
+            writeHeaders(getHeaders(self.lic), self.lic)
+            self.keys = getKeys(self.pssh, self.lic)
+            if self.keys is None:
                 self.signals.error.emit("Unable to obtain decryption keys.")
                 return
-            self.signals.progress.emit(
-                [self.uuid, f"Obtaining Keys", '', '100', '', '', self.link])
+            print(f"Keys => {self.keys}")
+            self.signals.progress.emit([self.uuid, f"Obtaining Keys", '', '100', '', '', self.source])
 
             # download data
-            ydl_opts = {
-                'allow_unplayable_formats': True,
-                'noprogress': True,
-                'quiet': True,
-                'fixup': 'never',
-                'format': 'bv,ba',
-                'no_warnings': True,
-                'outtmpl': {'default': self.uuid + '.f%(format_id)s.%(ext)s'},
-                'progress_hooks': [log]
-            }
-            yt_dlp.YoutubeDL(ydl_opts).download(self.link)
+            if not self.d:
+                ydl_opts = {
+                    'allow_unplayable_formats': True,
+                    'noprogress': True,
+                    'quiet': True,
+                    'fixup': 'never',
+                    'format': 'bv,ba',
+                    'no_warnings': True,
+                    'outtmpl': {'default': self.uuid + '.f%(format_id)s.%(ext)s'},
+                    'progress_hooks': [log]
+                }
+                yt_dlp.YoutubeDL(ydl_opts).download(self.source)
+            else:
+                self.videosize = 0 if self.src[0] is None else int(int(os.path.getsize(self.src[0]))/1_000_000)
+                self.audiosize = 0 if self.src[1] is None else int(int(os.path.getsize(self.src[1]))/1_000_000)
 
+            # TODO: improve this
             # decrypt
-            for i in range(len(self.src)):
+            for i in range(2):
                 s = self.src[i]
-                if s is not None:
-                    size = self.videosize
-                    typ = 'video'
-                    if i == 1:
-                        size = self.audiosize
-                        typ = 'audio'
-                    out = self.uuid + "." + typ + "_decrypted." + s.split(".")[len(s.split(".")) - 1]
-                    self.signals.progress.emit(
-                        [self.uuid, f"Decrypting ({typ.capitalize()})", size + " MB", '0', '', '', self.link])
-                    command = getMp4Decrypt() + " --key " + " --key ".join(self.keys) + ' ' + s + ' ' + out
-                    process = Popen(command, stdout=PIPE, stderr=PIPE)
-                    stdout, stderr = process.communicate()
-                    self.signals.progress.emit(
-                        [self.uuid, f"Decrypting ({typ.capitalize()})", size + " MB", '100', '', '', self.link])
-                    if stderr.decode('utf-8'):
-                        errorDialog(self.sniffer, "Failed decrypting " + s + ": " + stderr.decode('utf-8'))
-                        return
-                    self.src[i] = out
-                    if os.path.exists(s):
-                        os.remove(s)
+                if s is None:
+                    continue
+                size = self.videosize if i == 0 else self.audiosize
+                typ = 'video' if i == 0 else 'audio'
+
+                out = self.uuid + "." + typ + "_decrypted." + s.split(".")[len(s.split(".")) - 1]
+
+                self.signals.progress.emit([self.uuid, f"Decrypting ({typ.capitalize()})", str(size) + " MB", '0', '', '', self.source])
+
+                command = getMp4Decrypt() + " --key " + " --key ".join(self.keys) + ' ' + s + ' ' + out
+                process = Popen(command, stdout=PIPE, stderr=PIPE)
+                stdout, stderr = process.communicate()
+                self.signals.progress.emit(
+                    [self.uuid, f"Decrypting ({typ.capitalize()})", str(size) + " MB", '100', '', '', self.source])
+                if stderr.decode('utf-8'):
+                    self.signals.error.emit("Failed decrypting " + s + ": " + stderr.decode('utf-8'))
+                    return
+
+                self.src[i] = out
+                if os.path.exists(s) and not self.d:
+                    os.remove(s)
 
             # combine
             totalsize = str(int(float(self.videosize) + float(self.audiosize)))
-            self.signals.progress.emit(
-                [self.uuid, f"Combining", totalsize + " MB", '0', '', '', self.link])
+            self.signals.progress.emit([self.uuid, f"Combining", totalsize + " MB", '0', '', '', self.source])
             t = datetime.datetime.now()
             out = (self.uuid + '.{}-{}-{}_{}-{}-{}'.format(t.day, t.month, t.year, t.hour, t.minute, t.second) + '.mkv')
             if len(self.src) == 2:
                 v = ffmpeg.input(self.src[0])
                 a = ffmpeg.input(self.src[1])
                 c = config.parser
-                if not c.getboolean("MAIN", "ffmpegfrompath"):
-                    ffmpeg.output(v, a, out, vcodec='copy', acodec='copy').run(quiet=True, overwrite_output=True, cmd=c.get("MAIN", "ffmpegpath"))
+                if c.getboolean("MAIN", "ffmpegfrompath"):
+                    ffmpeg.output(v, a, out, vcodec='copy', acodec='copy').run(quiet=True, overwrite_output=True,
+                                                                               cmd=c.get("MAIN", "ffmpegpath"))
                 else:
                     ffmpeg.output(v, a, out, vcodec='copy', acodec='copy').run(quiet=True, overwrite_output=True)
                 if os.path.exists(self.src[0]):
                     os.remove(self.src[0])
                 if os.path.exists(self.src[1]):
                     os.remove(self.src[1])
-            self.signals.progress.emit(
-                [self.uuid, f"Combining", totalsize + " MB", '100', '', '', self.link])
-            #time.sleep(1)
-            self.signals.progress.emit(
-                [self.uuid, f"Finished", totalsize + " MB", '100', '', '', self.link])
+            self.signals.progress.emit([self.uuid, f"Combining", totalsize + " MB", '100', '', '', self.source])
+            # time.sleep(1)
+            self.signals.progress.emit([self.uuid, f"Finished", totalsize + " MB", '100', '', '', self.source])
             if config.parser.getboolean("MAIN", "downloadfrompath"):
-                shutil.copy(out, config.parser.get("MAIN", "downloadpath"))
+                try:
+                    shutil.move(out, config.parser.get("MAIN", "downloadpath"))
+                except Exception as ex:
+                    errorDialog("Unable to save file: " + str(ex))
             self.signals.completed.emit(self.uuid)
         except Exception as ex:
             self.signals.error.emit(str(ex))
@@ -330,6 +348,299 @@ class Browser(QRunnable):
                             self.signals.links.emit([1, x.url])
             except Exception:
                 pass
+
+
+class Advanced(QtWidgets.QWidget):
+
+    def choose(self, text, lineEdit):
+        dialog = QFileDialog(self)
+        dialog.setWindowTitle(text)
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+        dialog.setViewMode(QFileDialog.Detail)
+        dialog.setDirectory(str(Path.home()).replace("\\", "/"))
+        if dialog.exec_():
+            selected = dialog.selectedFiles()
+            if len(selected) == 1:
+                lineEdit.setText(selected[0].replace("\\", "/"))
+            else:
+                errorDialog(self, "Only one file can be selected.")
+
+    # TODO: i don't know any other way to do this
+    def choose1(self):
+        self.choose("Choose Local Encrypted Video File", self.lineEdit)
+
+    def choose2(self):
+        self.choose("Choose Local Encrypted Audio File", self.lineEdit_2)
+
+    def choose3(self):
+        self.choose("Choose Local MPD File", self.lineEdit_3)
+
+    def choose4(self):
+        self.choose("Choose Local MPD File", self.lineEdit_4)
+
+    def choose5(self):
+        self.choose("Choose Local init.mp4 File", self.lineEdit_5)
+
+    def __init__(self, main):
+        super().__init__()
+        self.main = main
+
+        self.setWindowTitle("MPDL/Advanced Mode")
+        self.resize(346, 420)
+        self.setFixedSize(346, 420)
+        self.setWindowIcon(util.getIcon())
+        self.label = QtWidgets.QLabel("Advanced Mode", self)
+        self.label.setGeometry(QtCore.QRect(87, 0, 171, 31))
+        self.label.setFont(util.getFont(17, False, False))
+        self.groupBox = QtWidgets.QGroupBox(" Content Source ", self)
+        self.groupBox.setGeometry(QtCore.QRect(10, 33, 326, 161))
+        self.groupBox_2 = QtWidgets.QGroupBox("                                            ", self.groupBox)
+        self.groupBox_2.setGeometry(QtCore.QRect(10, 76, 306, 75))
+        self.radioButton = QtWidgets.QRadioButton("Local Encrypted Video/Audio Files", self.groupBox_2)
+        self.radioButton.setGeometry(QtCore.QRect(13, -14, 191, 41))
+        self.radioButton.clicked.connect(self.radioButtonChecked)
+        self.lineEdit = QtWidgets.QLineEdit(self.groupBox_2)
+        self.lineEdit.setGeometry(QtCore.QRect(10, 21, 261, 20))
+        self.lineEdit.setPlaceholderText("Encrypted Video File")
+        self.lineEdit.setEnabled(False)
+        self.lineEdit_2 = QtWidgets.QLineEdit(self.groupBox_2)
+        self.lineEdit_2.setGeometry(QtCore.QRect(10, 45, 261, 20))
+        self.lineEdit_2.setPlaceholderText("Encrypted Audio File")
+        self.lineEdit_2.setEnabled(False)
+        self.toolButton = QtWidgets.QPushButton("...", self.groupBox_2)
+        self.toolButton.setGeometry(QtCore.QRect(273, 21, 25, 20))
+        self.toolButton.setEnabled(False)
+        self.toolButton.clicked.connect(self.choose1)
+        self.toolButton_2 = QtWidgets.QPushButton("...", self.groupBox_2)
+        self.toolButton_2.setGeometry(QtCore.QRect(273, 45, 25, 20))
+        self.toolButton_2.setEnabled(False)
+        self.toolButton_2.clicked.connect(self.choose2)
+        self.groupBox_3 = QtWidgets.QGroupBox("               ", self.groupBox)
+        self.groupBox_3.setGeometry(QtCore.QRect(10, 20, 306, 51))
+        self.lineEdit_3 = QtWidgets.QLineEdit(self.groupBox_3)
+        self.lineEdit_3.setGeometry(QtCore.QRect(10, 21, 261, 20))
+        self.lineEdit_3.setPlaceholderText("URL / Local File")
+        self.toolButton_3 = QtWidgets.QPushButton("...", self.groupBox_3)
+        self.toolButton_3.setGeometry(QtCore.QRect(273, 21, 25, 20))
+        self.toolButton_3.clicked.connect(self.choose3)
+        self.radioButton_2 = QtWidgets.QRadioButton("MPD", self.groupBox_3)
+        self.radioButton_2.setGeometry(QtCore.QRect(13, -2, 82, 17))
+        self.radioButton_2.setChecked(True)
+        self.radioButton_2.clicked.connect(self.radioButtonChecked2)
+        self.groupBox_4 = QtWidgets.QGroupBox(" PSSH Source ", self)
+        self.groupBox_4.setGeometry(QtCore.QRect(10, 200, 326, 101))
+        self.radioButton_3 = QtWidgets.QRadioButton(self.groupBox_4)
+        self.radioButton_3.setGeometry(QtCore.QRect(10, 22, 82, 17))
+        self.radioButton_3.setText("")
+        self.radioButton_3.setChecked(True)
+        self.radioButton_3.clicked.connect(self.radioButtonChecked3)
+        self.radioButton_4 = QtWidgets.QRadioButton(self.groupBox_4)
+        self.radioButton_4.setGeometry(QtCore.QRect(10, 46, 82, 17))
+        self.radioButton_4.setText("")
+        self.radioButton_4.clicked.connect(self.radioButtonChecked4)
+        self.radioButton_5 = QtWidgets.QRadioButton(self.groupBox_4)
+        self.radioButton_5.setGeometry(QtCore.QRect(10, 70, 82, 17))
+        self.radioButton_5.setText("")
+        self.radioButton_5.clicked.connect(self.radioButtonChecked5)
+        self.lineEdit_4 = QtWidgets.QLineEdit(self.groupBox_4)
+        self.lineEdit_4.setGeometry(QtCore.QRect(30, 20, 258, 20))
+        self.lineEdit_4.setPlaceholderText(".mpd URL / Local File")
+        self.lineEdit_5 = QtWidgets.QLineEdit(self.groupBox_4)
+        self.lineEdit_5.setGeometry(QtCore.QRect(30, 44, 258, 20))
+        self.lineEdit_5.setPlaceholderText("init.mp4 URL / Local File")
+        self.lineEdit_5.setEnabled(False)
+        self.lineEdit_6 = QtWidgets.QLineEdit(self.groupBox_4)
+        self.lineEdit_6.setGeometry(QtCore.QRect(30, 68, 285, 20))
+        self.lineEdit_6.setPlaceholderText("PSSH")
+        self.lineEdit_6.setEnabled(False)
+        self.toolButton_4 = QtWidgets.QPushButton("...", self.groupBox_4)
+        self.toolButton_4.setGeometry(QtCore.QRect(291, 20, 25, 20))
+        self.toolButton_4.clicked.connect(self.choose4)
+        self.toolButton_5 = QtWidgets.QPushButton("...", self.groupBox_4)
+        self.toolButton_5.setGeometry(QtCore.QRect(291, 44, 25, 20))
+        self.toolButton_5.setEnabled(False)
+        self.toolButton_5.clicked.connect(self.choose5)
+        self.groupBox_5 = QtWidgets.QGroupBox(" License Server ", self)
+        self.groupBox_5.setGeometry(QtCore.QRect(10, 310, 326, 51))
+        self.lineEdit_7 = QtWidgets.QLineEdit(self.groupBox_5)
+        self.lineEdit_7.setGeometry(QtCore.QRect(10, 20, 301, 20))
+        self.lineEdit_7.setPlaceholderText("License URL")
+        self.pushButton = QtWidgets.QPushButton("Download", self)
+        self.pushButton.setGeometry(QtCore.QRect(10, 390, 231, 23))
+        self.pushButton.clicked.connect(self.download)
+        self.checkBox = QtWidgets.QCheckBox("Clear Fields", self)
+        self.checkBox.setGeometry(QtCore.QRect(260, 393, 81, 17))
+        self.label_2 = QtWidgets.QLabel("Use the internal browser if you wish to use automatic headers.", self)
+        self.label_2.setGeometry(QtCore.QRect(12, 363, 321, 16))
+
+    def download(self):
+        from headers import headers
+        # Checks
+        if self.radioButton_2.isChecked() and not self.lineEdit_3.text():
+            errorDialog(self, "Please fill out the MPD field.")
+            return
+        if self.radioButton.isChecked() and not self.lineEdit.text() and not self.lineEdit_2.text():
+            errorDialog(self, "Please fill out at least one local file field.")
+            return
+        if self.radioButton_3.isChecked() and not self.lineEdit_4.text():
+            errorDialog(self, "Please fill out the mpd field.")
+            return
+        if self.radioButton_4.isChecked() and not self.lineEdit_5.text():
+            errorDialog(self, "Please fill out the init.mp4 field.")
+            return
+        if self.radioButton_5.isChecked() and not self.lineEdit_6.text():
+            errorDialog(self, "Please fill out the PSSH field.")
+            return
+        if not self.lineEdit_7.text():
+            errorDialog(self, "Please fill out the license url field.")
+            return
+
+        source = None
+        pssh = None
+        lic = self.lineEdit_7.text()
+        wid = str(uuid.uuid4())
+
+        if self.radioButton_2.isChecked():
+            source = self.lineEdit_3.text()
+        elif self.radioButton.isChecked():
+            source = [self.lineEdit.text() if self.lineEdit.text() else None,
+                      self.lineEdit_2.text() if self.lineEdit_2.text() else None]
+
+        if self.radioButton_3.isChecked():
+            # mpd url/file
+            if not self.lineEdit_4.text().startswith("http"):
+                # local
+                if not os.path.exists(self.lineEdit_4.text()):
+                    errorDialog(self, "MPD file does not exist.")
+                    return
+                pssh = util.getPSSH(self.lineEdit_4.text())
+                if pssh is None:
+                    errorDialog(self, "No PSSH found in MPD.")
+                    return
+            else:
+                # url
+                writeHeaders(getHeaders(lic), lic)
+                try:
+                    response = requests.get(url=self.lineEdit_4.text(), headers=headers)
+                except Exception as ex:
+                    errorDialog(self, f"Unable to download mpd file:\n{ex}")
+                    return
+                if not response.ok:
+                    errorDialog(self, f"Network error occurred ({response.status_code}) while downloading mpd")
+                    return
+                mpd = f"{wid}.mpd"
+                with open(mpd, mode="wb") as file:
+                    file.write(response.content)
+                pssh = util.getPSSH(mpd)
+                if pssh is None:
+                    errorDialog(self, "No PSSH found in MPD.")
+                    return
+                os.remove(mpd)
+        elif self.radioButton_4.isChecked():
+            if not self.lineEdit_5.text().startswith("http"):
+                # local
+                if not os.path.exists(self.lineEdit_5.text()):
+                    errorDialog(self, "init.mp4 file does not exist.")
+                    return
+                rs = initext.ext(self.lineEdit_5.text().replace('"', ''))
+                if len(rs) == 0:
+                    errorDialog(self, "No valid pssh found in init.mp4 file.")
+                    return
+                pssh = min(rs, key=len)
+            else:
+                # url
+                writeHeaders(getHeaders(lic), lic)
+                try:
+                    response = requests.get(url=self.lineEdit_5.text(), headers=headers.headers)
+                except Exception as ex:
+                    errorDialog(self, f"Unable to download init.mp4 file:\n{ex}")
+                    return
+                if not response.ok:
+                    errorDialog(self, f"Network error occurred ({response.status_code}) while downloading init.mp4")
+                    return
+                init = f"{wid}-init.mp4"
+                with open(init, mode="wb") as file:
+                    file.write(response.content)
+                rs = initext.ext(init)
+                if len(rs) == 0:
+                    errorDialog(self, "No valid pssh found in init.mp4 file.")
+                    return
+                pssh = min(rs, key=len)
+                os.remove(init)
+        elif self.radioButton_5.isChecked():
+            pssh = self.lineEdit_6.text()
+
+        if pssh is None:
+            errorDialog(self, "No PSSH found.")
+            return
+        if source is None:
+            errorDialog(self, "No source available.")
+            return
+
+        pool = QThreadPool.globalInstance()
+        worker = Worker(source, pssh, lic, wid)
+        worker.signals.completed.connect(self.main.complete)
+        worker.signals.started.connect(self.main.start)
+        worker.signals.progress.connect(self.main.progress)
+        worker.signals.error.connect(self.main.error)
+        pool.start(worker)
+
+        if self.checkBox.isChecked():
+            self.lineEdit.clear()
+            self.lineEdit_2.clear()
+            self.lineEdit_3.clear()
+            self.lineEdit_4.clear()
+            self.lineEdit_5.clear()
+            self.lineEdit_6.clear()
+            self.lineEdit_7.clear()
+
+    def radioButtonChecked3(self):
+        self.lineEdit_4.setEnabled(True)
+        self.toolButton_4.setEnabled(True)
+        self.lineEdit_5.setEnabled(False)
+        self.toolButton_5.setEnabled(False)
+        self.lineEdit_6.setEnabled(False)
+
+    def radioButtonChecked4(self):
+        self.lineEdit_4.setEnabled(False)
+        self.toolButton_4.setEnabled(False)
+        self.lineEdit_5.setEnabled(True)
+        self.toolButton_5.setEnabled(True)
+        self.lineEdit_6.setEnabled(False)
+
+    def radioButtonChecked5(self):
+        self.lineEdit_4.setEnabled(False)
+        self.toolButton_4.setEnabled(False)
+        self.lineEdit_5.setEnabled(False)
+        self.toolButton_5.setEnabled(False)
+        self.lineEdit_6.setEnabled(True)
+
+    def radioButtonChecked(self):  # local
+        if self.radioButton.isChecked():
+            self.radioButton_2.setChecked(False)
+            self.lineEdit.setEnabled(True)
+            self.lineEdit_2.setEnabled(True)
+            self.toolButton.setEnabled(True)
+            self.toolButton_2.setEnabled(True)
+            self.lineEdit_3.setEnabled(False)
+            self.toolButton_3.setEnabled(False)
+        else:
+            self.radioButton.setChecked(True)
+
+    def radioButtonChecked2(self):  # mpd
+        if self.radioButton_2.isChecked():
+            self.radioButton.setChecked(False)
+            self.lineEdit_3.setEnabled(True)
+            self.toolButton_3.setEnabled(True)
+            self.lineEdit.setEnabled(False)
+            self.lineEdit_2.setEnabled(False)
+            self.toolButton.setEnabled(False)
+            self.toolButton_2.setEnabled(False)
+        else:
+            self.radioButton_2.setChecked(True)
+
+    def closeEvent(self, event):
+        self.main.pushButton_6.setEnabled(True)
 
 
 class About(QtWidgets.QWidget):
@@ -433,7 +744,7 @@ class Settings(QtWidgets.QWidget):
         self.groupBox_4 = QtWidgets.QGroupBox("General", self)
         self.groupBox_4.setGeometry(QtCore.QRect(100, 50, 330, 78))
 
-        self.groupBox_7 = QtWidgets.QGroupBox(" "*39, self.groupBox_4)
+        self.groupBox_7 = QtWidgets.QGroupBox(" " * 39, self.groupBox_4)
         self.groupBox_7.setGeometry(QtCore.QRect(10, 20, 200, 50))
 
         self.groupBox_8 = QtWidgets.QGroupBox("CDM", self.groupBox_4)
@@ -613,6 +924,8 @@ class Settings(QtWidgets.QWidget):
         c["BROWSER"]["addons"] = util.setAddons(self.listWidget_2)
         config.writeConfig()
         QMessageBox.information(self, "MPDL/Settings", "Settings saved successfully.")
+        self.hide()
+        self.main.pushButton_4.setEnabled(True)
 
     def itemselection(self):
         i = self.listWidget.selectedIndexes()[0].row()
@@ -662,7 +975,7 @@ class Downloads(QtWidgets.QWidget):
         self.table = QtWidgets.QTableWidget(self)
         self.table.setGeometry(QtCore.QRect(10, 50, 680, 240))
         self.table.setColumnCount(7)
-        arr = {"UUID": "0", "Status": "1", "Size": "2", "Progress": "3", "ETA": "4", "Speed": "5", "URL": "6"}
+        arr = {"UUID": "0", "Status": "1", "Size": "2", "Progress": "3", "ETA": "4", "Speed": "5", "Source": "6"}
         self.table.setHorizontalHeaderLabels(arr.keys())
         self.table.setEditTriggers(self.table.NoEditTriggers)
 
@@ -670,52 +983,58 @@ class Downloads(QtWidgets.QWidget):
         self.main.pushButton_3.setEnabled(True)
 
 
+# TODO
+#  add more error handling
+#  divide size to get MB
+#  check if sizes have to be added up
+#  combination type error: str+int at "Decrypting (Video)"
+
+
 class Sniffer(QtWidgets.QWidget):
 
     def hanldebutton(self):
+        import headers
+
         i = self.main.sniffer.combobox.currentIndex()
         if i == 0:
             if len(self.listView.selectedItems()) >= 1:
+                wid = str(uuid.uuid4())  # worker id
                 mpd = self.listView.selectedItems()[0].text()
-                fin = ''
-                correct, pssh = util.getPSSH(mpd)
-                if correct and pssh != '':
-                    fin = pssh
+
+                # get mpd
+                writeHeaders(getHeaders(mpd), mpd)
+                response = requests.get(url=mpd, headers=headers.headers)
+                if not response.ok:
+                    errorDialog(self, f"Network error occurred ({response.status_code}) while downloading mpd")
+                    return
+                mpd = f"{wid}.mpd"
+                with open(mpd, mode="wb") as file:
+                    file.write(response.content)
+                pssh = util.getPSSH(file)
+                os.remove(mpd)
+
+                if pssh is None:
+                    errorDialog(self, "No PSSH found in MPD.")
+                    return
                 else:
-                    pssh = util.getPSSH2(mpd)
-                    if pssh:
-                        fin = pssh
-                if fin == '':
-                    QMessageBox.information(
-                        self,
-                        "MPDL/Information",
-                        "No PSSH found in URL.",
-                        buttons=QMessageBox.Ok,
-                        defaultButton=QMessageBox.Ok,
-                    )
-                else:
-                    lic = ''
+                    lic = None
                     for item in [self.listView2.item(x) for x in range(self.listView2.count())]:
                         if item.font().bold():
                             lic = item.text()
-                    if lic == '':
-                        ok = QMessageBox.question(
+                    if lic is None:
+                        QMessageBox.information(
                             self,
                             "MPDL/Information",
-                            "No License URL selected.\nDo you wish to continue?",
-                            buttons=QMessageBox.Yes | QMessageBox.No,
-                            defaultButton=QMessageBox.Yes,
+                            "No License URL selected.",
+                            buttons=QMessageBox.Ok,
+                            defaultButton=QMessageBox.Ok,
                         )
-                        if ok != QMessageBox.Yes:
-                            return  # TODO if yes was chosen, don't decrypt
-                    #print("Found PSSH => " + fin)
-                    #print("License URL => " + lic)
-                    #print("Headers => \n" + getHeaders(mpd))
+                        return
 
                     self.listView.selectedItems()[0].setForeground(Qt.lightGray)
 
                     pool = QThreadPool.globalInstance()
-                    worker = Worker(mpd, fin, lic, str(uuid.uuid4()), self)
+                    worker = Worker(mpd, pssh, lic, wid)
                     worker.signals.completed.connect(self.main.complete)
                     worker.signals.started.connect(self.main.start)
                     worker.signals.progress.connect(self.main.progress)
@@ -838,6 +1157,10 @@ class Main(QtWidgets.QWidget):
             if self.sniffer.listView2.verticalScrollBar().value() == self.sniffer.listView2.verticalScrollBar().maximum():
                 self.sniffer.listView2.scrollToBottom()
 
+    def startAdvanced(self):
+        self.pushButton_6.setEnabled(False)
+        self.advanced.show()
+
     def startSniffer(self):
         self.pushButton_2.setEnabled(False)
         self.sniffer.show()
@@ -897,48 +1220,53 @@ class Main(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         config.setupConfig()
+        util.clearHeaders()
 
         self.setWindowTitle("MPDL/Main")
         self.resize(341, 167)
-        self.setFixedSize(341, 167)
+        self.setFixedSize(390, 167)
         self.setWindowIcon(util.getIcon())
 
+        self.advanced = Advanced(self)
         self.sniffer = Sniffer(self)
         self.downloads = Downloads(self)
         self.settings = Settings(self)
         self.about = About(self)
 
         self.label_2 = QtWidgets.QLabel("MPDL", self)
-        self.label_2.setGeometry(QtCore.QRect(180, 14, 141, 51))
+        self.label_2.setGeometry(QtCore.QRect(229, 14, 141, 51))
 
         self.label_2.setFont(util.getFont(43, True, True))
         self.label_3 = QtWidgets.QLabel("v" + VERSION, self)
-        self.label_3.setGeometry(QtCore.QRect(225, 63, 31, 16))
+        self.label_3.setGeometry(QtCore.QRect(274, 63, 31, 16))
         self.groupBox_2 = QtWidgets.QGroupBox("Panels", self)
-        self.groupBox_2.setGeometry(QtCore.QRect(11, 4, 120, 153))
+        self.groupBox_2.setGeometry(QtCore.QRect(11, 4, 169, 153))
         self.pushButton = QtWidgets.QPushButton("Browser", self.groupBox_2)
-        self.pushButton.setGeometry(QtCore.QRect(10, 18, 101, 23))
+        self.pushButton.setGeometry(QtCore.QRect(10, 18, 150, 23))
         self.pushButton.clicked.connect(self.startBrowser)
-        self.pushButton_2 = QtWidgets.QPushButton("URL Sniffer", self.groupBox_2)
-        self.pushButton_2.setGeometry(QtCore.QRect(10, 44, 101, 23))
+        self.pushButton_2 = QtWidgets.QPushButton("Default", self.groupBox_2)
+        self.pushButton_2.setGeometry(QtCore.QRect(10, 44, 74, 23))
         self.pushButton_2.clicked.connect(self.startSniffer)
+        self.pushButton_6 = QtWidgets.QPushButton("Advanced", self.groupBox_2)
+        self.pushButton_6.setGeometry(QtCore.QRect(86, 44, 75, 23))
+        self.pushButton_6.clicked.connect(self.startAdvanced)
         self.pushButton_3 = QtWidgets.QPushButton("Downloads", self.groupBox_2)
-        self.pushButton_3.setGeometry(QtCore.QRect(10, 70, 101, 23))
+        self.pushButton_3.setGeometry(QtCore.QRect(10, 70, 150, 23))
         self.pushButton_3.clicked.connect(self.startDownloads)
         self.pushButton_4 = QtWidgets.QPushButton("Settings", self.groupBox_2)
-        self.pushButton_4.setGeometry(QtCore.QRect(10, 96, 101, 23))
+        self.pushButton_4.setGeometry(QtCore.QRect(10, 96, 150, 23))
         self.pushButton_4.clicked.connect(self.startSettings)
         self.pushButton_5 = QtWidgets.QPushButton("About", self.groupBox_2)
-        self.pushButton_5.setGeometry(QtCore.QRect(10, 122, 101, 23))
+        self.pushButton_5.setGeometry(QtCore.QRect(10, 122, 150, 23))
         self.pushButton_5.clicked.connect(self.startAbout)
         self.line = QtWidgets.QFrame(self)
-        self.line.setGeometry(QtCore.QRect(132, 10, 16, 146))
+        self.line.setGeometry(QtCore.QRect(181, 10, 16, 146))
         self.line.setFrameShape(QtWidgets.QFrame.VLine)
         self.line_2 = QtWidgets.QFrame(self)
-        self.line_2.setGeometry(QtCore.QRect(150, 81, 180, 16))
+        self.line_2.setGeometry(QtCore.QRect(199, 81, 180, 16))
         self.line_2.setFrameShape(QtWidgets.QFrame.HLine)
         self.groupBox = QtWidgets.QGroupBox("About", self)
-        self.groupBox.setGeometry(QtCore.QRect(150, 96, 181, 61))
+        self.groupBox.setGeometry(QtCore.QRect(199, 96, 181, 61))
         self.label = QtWidgets.QLabel("(c)", self.groupBox)
         self.label.setGeometry(QtCore.QRect(10, 32, 16, 16))
         self.label.setOpenExternalLinks(False)
