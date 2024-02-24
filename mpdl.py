@@ -1070,7 +1070,7 @@ class Sniffer(QtWidgets.QWidget):
     def __init__(self, main):
         super().__init__()
         self.main = main
-        self.setWindowTitle("MPDL/URL Sniffer")
+        self.setWindowTitle("MPDL/Normal Mode")
         self.resize(700, 300)
         self.setFixedSize(700, 300)
         self.setWindowIcon(util.getIcon())
@@ -1105,7 +1105,7 @@ class Sniffer(QtWidgets.QWidget):
                                         "padding-left: 7px"
                                         "}")
         self.combobox.currentIndexChanged.connect(self.combobox_change)
-        self.label = QtWidgets.QLabel("URL Sniffer", self)
+        self.label = QtWidgets.QLabel("Normal Mode", self)
         self.label.setGeometry(QtCore.QRect(20, 10, 151, 31))
         self.label.setFont(util.getFont(17, False, True))
         self.pushButton = QtWidgets.QPushButton("Download", self)
