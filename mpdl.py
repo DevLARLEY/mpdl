@@ -391,7 +391,7 @@ class Advanced(QtWidgets.QWidget):
         self.setWindowIcon(util.getIcon())
         self.label = QtWidgets.QLabel("Advanced Mode", self)
         self.label.setGeometry(QtCore.QRect(87, 0, 171, 31))
-        self.label.setFont(util.getFont(17, False, False))
+        self.label.setFont(util.getFont(17, False, True))
         self.groupBox = QtWidgets.QGroupBox(" Content Source ", self)
         self.groupBox.setGeometry(QtCore.QRect(10, 33, 326, 161))
         self.groupBox_2 = QtWidgets.QGroupBox("                                            ", self.groupBox)
