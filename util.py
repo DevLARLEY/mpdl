@@ -1,8 +1,4 @@
-import json
 import re
-import requests
-import urllib.request
-import xmltodict
 from PyQt5 import QtGui
 
 
@@ -55,66 +51,16 @@ def formatCURL(header):
     return r.rsplit(",", 1)[0]
 
 
-def getPSSH(mpd_url):
-    pssh = ''
-    correct = True
-    try:
-        r = requests.get(url=mpd_url)
-        r.raise_for_status()
-        xml = xmltodict.parse(r.text)
-        mpd = json.loads(json.dumps(xml))
-        periods = mpd['MPD']['Period']
-    except Exception:
-        correct = False
-    try:
-        if isinstance(periods, list):
-            for idx, period in enumerate(periods):
-                if isinstance(period['AdaptationSet'], list):
-                    for ad_set in period['AdaptationSet']:
-                        if ad_set['@mimeType'] == 'video/mp4':
-                            try:
-                                for t in ad_set['ContentProtection']:
-                                    if t['@schemeIdUri'].lower() == "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed":
-                                        pssh = t["cenc:pssh"]
-                            except Exception:
-                                pass
-                else:
-                    if period['AdaptationSet']['@mimeType'] == 'video/mp4':
-                        try:
-                            for t in period['AdaptationSet']['ContentProtection']:
-                                if t['@schemeIdUri'].lower() == "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed":
-                                    pssh = t["cenc:pssh"]
-                        except Exception:
-                            pass
-        else:
-            for ad_set in periods['AdaptationSet']:
-                if ad_set['@mimeType'] == 'video/mp4':
-                    try:
-                        for t in ad_set['ContentProtection']:
-                            if t['@schemeIdUri'].lower() == "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed":
-                                pssh = t["cenc:pssh"]
-                    except Exception:
-                        pass
-    except Exception:
-        correct = False
-    return correct, pssh
+def clearHeaders():
+    file = open("headers.py", 'w')
+    file.write("headers = {}\n")
+    file.close()
 
 
-def getPSSH2(mpd_url):
-    pssh = []
-    try:
-        name, headers = urllib.request.urlretrieve(mpd_url)
-    except Exception:
-        return []
-    f = open(name, "r").read()
+def getPSSH(file):
+    f = open(file, "r").read()
     res = re.findall('<cenc:pssh.*>.*<.*/cenc:pssh>', f)
-    for r in res:
-        try:
-            r = r.split('>')[1].split('<')[0]
-            pssh.append(r)
-        except Exception:
-            return []
-    if pssh:
-        return min(pssh, key=len)
+    if res:
+        return min([x[11:-12] for x in res], key=len)
     else:
-        return []
+        return None
