@@ -27,7 +27,7 @@ from pathlib import Path
 
 # Config
 # Selenium Version 3.4.1
-VERSION = "3.0.0"
+VERSION = "3.1.1"
 
 app = QtWidgets.QApplication(sys.argv)
 driverType = None
