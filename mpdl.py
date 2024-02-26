@@ -999,18 +999,18 @@ class Sniffer(QtWidgets.QWidget):
         if i == 0:
             if len(self.listView.selectedItems()) >= 1:
                 wid = str(uuid.uuid4())  # worker id
-                mpd = self.listView.selectedItems()[0].text()
+                mpd_url = self.listView.selectedItems()[0].text()
 
                 # get mpd
-                writeHeaders(getHeaders(mpd), mpd)
-                response = requests.get(url=mpd, headers=headers.headers)
+                writeHeaders(getHeaders(mpd_url), mpd_url)
+                response = requests.get(url=mpd_url, headers=headers.headers)
                 if not response.ok:
                     errorDialog(self, f"Network error occurred ({response.status_code}) while downloading mpd")
                     return
                 mpd = f"{wid}.mpd"
                 with open(mpd, mode="wb") as file:
                     file.write(response.content)
-                pssh = util.getPSSH(file)
+                pssh = util.getPSSH(mpd)
                 os.remove(mpd)
 
                 if pssh is None:
