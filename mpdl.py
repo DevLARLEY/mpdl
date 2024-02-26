@@ -1034,7 +1034,7 @@ class Sniffer(QtWidgets.QWidget):
                     self.listView.selectedItems()[0].setForeground(Qt.lightGray)
 
                     pool = QThreadPool.globalInstance()
-                    worker = Worker(mpd, pssh, lic, wid)
+                    worker = Worker(mpd_url, pssh, lic, wid)
                     worker.signals.completed.connect(self.main.complete)
                     worker.signals.started.connect(self.main.start)
                     worker.signals.progress.connect(self.main.progress)
