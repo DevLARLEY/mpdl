@@ -60,7 +60,4 @@ def clearHeaders():
 def getPSSH(file):
     f = open(file, "r").read()
     res = re.findall('<cenc:pssh.*>.*<.*/cenc:pssh>', f)
-    if res:
-        return min([x[11:-12] for x in res], key=len)
-    else:
-        return None
+    return str(min([x[11:-12] for x in res], key=len)).split(">")[-1].split("<")[-1] if res else None
