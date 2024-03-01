@@ -470,7 +470,7 @@ class Advanced(QtWidgets.QWidget):
         self.pushButton.clicked.connect(self.download)
         self.checkBox = QtWidgets.QCheckBox("Clear Fields", self)
         self.checkBox.setGeometry(QtCore.QRect(260, 393, 81, 17))
-        self.label_2 = QtWidgets.QLabel("Use the internal browser if you wish to use automatic headers.", self)
+        self.label_2 = QtWidgets.QLabel("Use the internal browser if you wish to use auto header copy.", self)
         self.label_2.setGeometry(QtCore.QRect(12, 363, 321, 16))
 
     def download(self):
