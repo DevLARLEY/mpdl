@@ -32,7 +32,7 @@ GUI-Based MPD Downloader for DRM Protected content.
 11. Select an MPD URL from the list and hit 'Download'
 + If you want more control:
 6. Open the advanced mode.
-7. Enter everything you have.
+7. Enter everything you have. (**use the internal browser if you want to have the request headers automatically transferred to pywidevine**)
 8. Hit 'Download'
 
 ![image](https://github.com/DevLARLEY/mpdl/assets/121249322/f51cf92c-cbc6-438e-a562-5b9500fed4d8)
